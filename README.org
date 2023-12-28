@@ -1,0 +1,61 @@
+* ems-ssip
+
+It is Christmas 2023. The outside temp is over 30 Celcius, I have a fridge of cold beer
+and tonic water and a cupboard full of refreshing and interesting Gins. What to do over
+the holiday break to keep me occupied?
+
+I know! Why not try to write a bsic speech server for Emacspeak which will use
+speech-dispatcher as the back end synthesis engine?
+
+I fire up my trusty Linux Fedora, open Google Music and kick off my current favourite
+playlist, a selection of southern country devil music from The Deep South, Brown Bird, The
+Devil Makes Three and others and pour a cold G&T using an Australian Gin made with native
+botanicals and fire up Emacspeak.
+
+Over the week between Christmas and New Year, after probably more beers and gins than is
+good for me, some great loud music and way too much good festive food and more than one
+afternoon nap, what resulted is contained in this repository.
+
+- It is very rough
+
+- It is more a proof of concept rather than a production speech server
+
+- It is a work in progress.
+
+- The journey is the priority, not the result. With luck, it may be the basis for
+  something useful or it may just give others some ideas on making something useful.
+
+- Rather than a functional server with a few bugs, this is probably better thought of as a
+  big bug with some functionality.
+
+More to come as things evolve!
+
+** Pre-requisites
+
+- The server is written in Javascript using node.
+
+- It assumes an installed and working speech-dispatcher
+
+- It assumes an installed and working Emacspeak
+
+** Installation
+
+Not yet clear! Will update once things progress further!
+
+** Basic Implementation
+
+Basically, a node script which runs in an infinite loop reading input from standard in,
+parsing it and caling speech-dispatcher SSIP commands via the speech-dispatcher Unix
+socket.
+
+*** Development Plan
+
+| Task                                                  | Status                  |
+| Implement SSIP interface from JS to speech-dispatcher | Implemented. Not tested |
+| Implement queing and dispatching to speech-dispatcher | In-progress             |
+| Implement input reading loop and parsing input        | Not started             |
+| Update Emacspeak voices for this server               | Not started             |
+| Update Emacspeak configuration to add this server     | Not started             |
+
+
+
