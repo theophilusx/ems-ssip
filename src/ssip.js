@@ -1,6 +1,8 @@
-"use strict";
+'use strict';
 
-const net = require("net");
+const net = require('node:net');
+const fs = require('node:fs/promises');
+const { execFileSync } = require('node:child_process');
 
 class SsipClient {
   constructor() {
@@ -12,28 +14,28 @@ class SsipClient {
     this.volume = 0;
     this.isTalking = false;
     this.charFactor = 1.2;
-    this.punctuation = "some";
-    this.play = "/usr/bin/aplay -q";
+    this.punctuation = 'some';
+    this.play = '/usr/bin/aplay -q';
     this.debug = false;
     this.paused = false;
-    this.priority = "text";
+    this.priority = 'text';
     this.isStopped = false;
     this.inBlock = false;
-    this.client = undefined;
-    this.EOL = "\r\n";
-    this.dataRE = /\d\d\d-(.*)/;
-    this.statusRE = /(\d\d\d) (.*)/;
+    this.client = null;
+    this.EOL = '\r\n';
+    this.dataRE = /\d{3}-(.*)/;
+    this.statusRE = /(\d{3}) (.*)/;
   }
 
-  _parseResponse(r) {
+  #parseResponse(r) {
     const result = {
       data: [],
-      statusCode: "",
-      statusMsg: "",
+      statusCode: '',
+      statusMsg: '',
     };
-    const lines = r.split(this.EOL).filter((l) => l !== "");
+    const lines = r.split(this.EOL).filter((l) => l !== '');
     lines.forEach((l) => {
-      if (l.startsWith("-", 3)) {
+      if (l.startsWith('-', 3)) {
         let match = this.dataRE.exec(l);
         result.data.push(match[1]);
       } else {
@@ -45,79 +47,99 @@ class SsipClient {
     return result;
   }
 
-  _addListeners(resolve, reject, buf) {
+  #addListeners(resolve, reject, buf) {
     let handlers = {
       error: (e) => {
         reject(e);
       },
       data: (d) => {
-        let cmdEnd = /\d\d\d .*/;
+        let cmdEnd = /\d{3} .*/;
         buf += d;
-        if (cmdEnd.exec(d)) {
-          resolve(this._parseResponse(buf));
+        if (cmdEnd.test(d)) {
+          resolve(this.#parseResponse(buf));
         }
       },
       end: () => {
         resolve(buf);
       },
     };
-    this.client.on("error", handlers.error);
-    this.client.on("data", handlers.data);
-    this.client.on("end", handlers.end);
+    this.client.on('error', handlers.error);
+    this.client.on('data', handlers.data);
+    this.client.on('end', handlers.end);
     return handlers;
   }
 
-  _removeListeners(handlers) {
-    this.client.removeListener("data", handlers.data);
-    this.client.removeListener("end", handlers.end);
-    this.client.removeListener("error", handlers.error);
+  #removeListeners(handlers) {
+    this.client.removeListener('data', handlers.data);
+    this.client.removeListener('end', handlers.end);
+    this.client.removeListener('error', handlers.error);
   }
 
-  async command(cmd) {
+  command(cmd) {
     let listeners;
-    let response = "";
+    let response = '';
 
     return new Promise((resolve, reject) => {
       try {
-        listeners = this._addListeners(resolve, reject, response);
+        listeners = this.#addListeners(resolve, reject, response);
         this.client.write(cmd + this.EOL);
       } catch (err) {
         reject(err);
       }
     }).finally(() => {
-      this._removeListeners(listeners);
+      this.#removeListeners(listeners);
     });
   }
 
-  async connect(socketPath) {
-    const _getConnection = async (path) => {
-      return new Promise((resolve, reject) => {
-        let ssip;
-        try {
-          ssip = net.createConnection(path, () => {
-            this.client = ssip;
-            ssip.setEncoding("utf8");
-            ssip.on("close", (hadError) => {
-              if (hadError) {
-                console.log("SSIP connection closed due to an error");
-              } else {
-                console.log("SSIP connection closed");
-              }
-              this.ssip = undefined;
-            });
-            resolve(ssip);
-          });
-          ssip.on("error", (err) => {
-            reject(err);
-          });
-        } catch (err) {
-          reject(err);
-        }
-      });
-    };
-
+  async #serverRunning() {
+    const sdPidFile =
+      process.env.SPEECH_DISPATCHER_PID ||
+      `${process.env.XDG_RUNTIME_DIR}/speech-dispatcher/pid/speech-dispatcher.pid`;
     try {
-      let ssip = await _getConnection(socketPath);
+      await fs.access(sdPidFile);
+      const pid = await fs.readFile(sdPidFile, { encoding: 'utf8' });
+      await fs.access(`/proc/${pid.trim()}`);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  #getConnection(path) {
+    return new Promise((resolve, reject) => {
+      let ssip;
+      try {
+        ssip = net.createConnection(path, () => {
+          this.client = ssip;
+          ssip.setEncoding('utf8');
+          ssip.on('close', (hadError) => {
+            if (hadError) {
+              console.log('SSIP connection closed due to an error');
+            }
+            this.ssip = undefined;
+          });
+          resolve(ssip);
+        });
+        ssip.on('error', (err) => {
+          reject(err);
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  async connect(socketPath, spawn = true) {
+    try {
+      if (this.client) {
+        throw new Error('Error: Already connected to speech-dispatcher');
+      }
+      const serverRunning = await this.#serverRunning();
+      if (!serverRunning && spawn) {
+        console.log(spawn ? 'Starting server' : 'Not starting server');
+        execFileSync('speech-dispatcher', ['--spawn']);
+      }
+      let ssip = await this.#getConnection(socketPath);
       let user = process.env.USER;
       await this.command(`SET self CLIENT_NAME ${user}:ems-ssip:server`);
       return ssip;
@@ -127,9 +149,13 @@ class SsipClient {
   }
 
   async end() {
-    let resp = await this.command("QUIT");
+    if (!this.client) {
+      // not an error to try and close a non-existent connection
+      return 'Not connected';
+    }
+    let resp = await this.command('QUIT');
     this.client.end();
-    this.client = undefined;
+    this.client = null;
     return resp[0];
   }
 
@@ -139,20 +165,20 @@ class SsipClient {
 
   async setPunctuation(mode) {
     switch (mode) {
-      case "all": {
-        this.punctuation = "all";
+      case 'all': {
+        this.punctuation = 'all';
         break;
       }
-      case "some": {
-        this.punctuation = "some";
+      case 'some': {
+        this.punctuation = 'some';
         break;
       }
-      case "none": {
-        this.punctuation = "none";
+      case 'none': {
+        this.punctuation = 'none';
         break;
       }
       default: {
-        this.punctuation = "some";
+        this.punctuation = 'some';
         break;
       }
     }
@@ -160,11 +186,11 @@ class SsipClient {
   }
 
   async listOutputModules() {
-    return await this.command("LIST OUTPUT_MODULES");
+    return await this.command('LIST OUTPUT_MODULES');
   }
 
   async getOutputModule() {
-    return await this.command("GET OUTPUT_MODULE");
+    return await this.command('GET OUTPUT_MODULE');
   }
 
   async setOutputModule(module) {
@@ -172,7 +198,7 @@ class SsipClient {
   }
 
   async listVoices() {
-    return await this.command("LIST VOICES");
+    return await this.command('LIST VOICES');
   }
 
   async setVoice(voice) {
@@ -180,7 +206,7 @@ class SsipClient {
   }
 
   async getVoice() {
-    return await this.command("GET VOICE_TYPE");
+    return await this.command('GET VOICE_TYPE');
   }
 
   async setLanguage(lang) {
@@ -202,7 +228,7 @@ class SsipClient {
   }
 
   async getRate() {
-    return await this.command("GET RATE");
+    return await this.command('GET RATE');
   }
 
   async setPitch(pitchLevel) {
@@ -211,7 +237,7 @@ class SsipClient {
   }
 
   async getPitch() {
-    return await this.command("GET PITCH");
+    return await this.command('GET PITCH');
   }
 
   async setVolume(vol) {
@@ -220,26 +246,26 @@ class SsipClient {
   }
 
   async getVolume() {
-    return await this.command("GET VOLUME");
+    return await this.command('GET VOLUME');
   }
 
   async stop() {
-    return await this.command("STOP self");
+    return await this.command('STOP self');
   }
 
   async cancel() {
-    return await this.command("CANCEL self");
+    return await this.command('CANCEL self');
   }
 
   async pause() {
     let resp = {
       data: [],
-      statusCode: "200",
-      statusMsg: "Already paused",
+      statusCode: '200',
+      statusMsg: 'Already paused',
     };
     if (!this.paused) {
       this.paused = true;
-      return await this.command("PAUSE self");
+      return await this.command('PAUSE self');
     }
     return resp;
   }
@@ -247,12 +273,12 @@ class SsipClient {
   async resume() {
     let resp = {
       data: [],
-      statusCode: "200",
-      statusMsg: "Not paused",
+      statusCode: '200',
+      statusMsg: 'Not paused',
     };
     if (this.paused) {
       this.paused = false;
-      return await this.command("RESUME self");
+      return await this.command('RESUME self');
     }
     return resp;
   }
@@ -263,9 +289,9 @@ class SsipClient {
   }
 
   async speak(txt) {
-    const readyResp = await this.command("SPEAK");
-    if (readyResp.statusCode.startsWith("2")) {
-      return await this.command(txt + this.EOL + ".");
+    const readyResp = await this.command('SPEAK');
+    if (readyResp.statusCode.startsWith('2')) {
+      return await this.command(txt + this.EOL + '.');
     }
   }
 
@@ -285,24 +311,24 @@ class SsipClient {
     if (this.inBlock) {
       return {
         data: [],
-        statusCode: "200",
-        statusMsg: "Already in a block!",
+        statusCode: '200',
+        statusMsg: 'Already in a block!',
       };
     } else {
       this.inBlock = true;
-      return await this.command("BLOCK BEGIN");
+      return await this.command('BLOCK BEGIN');
     }
   }
 
   async blockEnd() {
     if (this.inBlock) {
       this.inBlock = false;
-      return await this.command("BLOCK END");
+      return await this.command('BLOCK END');
     } else {
       return {
         data: [],
-        statusCode: "200",
-        statusMsg: "Not in a block",
+        statusCode: '200',
+        statusMsg: 'Not in a block',
       };
     }
   }
