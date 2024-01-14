@@ -100,7 +100,7 @@ class SsipClient {
       const pid = await fs.readFile(sdPidFile, { encoding: 'utf8' });
       await fs.access(`/proc/${pid.trim()}`);
       return true;
-    } catch (e) {
+    } catch {
       return false;
     }
   }
